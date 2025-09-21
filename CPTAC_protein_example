@@ -1,0 +1,183 @@
+---
+title: "CPTAC Protein Tumor versus Nornal"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    mathjax: true
+tocolor: '#39ABD1'
+editior_options:
+  chunk_output_type: console
+---
+
+Date: `r Sys.Date()`
+
+
+```{r setup, include=FALSE}
+
+#set knitr options
+options(knitr.table.format = "html")
+knitr::opts_chunk$set(
+  echo=FALSE,
+  error=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  cache=FALSE
+)
+
+library(tidyverse)
+library(org.Hs.eg.db)
+library(htmltools)
+library(kableExtra)
+library(ggplot2)
+library(ggforce)
+library(ggpubr)
+library(DT)
+library(ComplexHeatmap)
+
+htmltools::tagList(DT::datatable(matrix(), extensions="Buttons"))
+```
+
+
+
+**CPTAC data**
+
+This report has been generated using the publicly available CPTAC mass spec proteomics data from data_freeze_v1.2. Protein abundance has been normalized and log2 transformed.
+
+**Analysis**
+
+Protein abundance from 8 tumor types with both tumor and normal tissue mass spec data are available. Differential protein expression is compared between tumor and normal (unpaired) by a Wilcoxon test and filtered for proteins < 1e-10 p-value. The top 10 proteins with the largest fold change are included in the tables and plots represented in the report.
+
+
+
+```{r import data, include=FALSE}
+#import the LUAD proteomic table from tumor and normal
+LUAD_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/LUAD/LUAD_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+LUAD_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/LUAD/LUAD_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import the LUAD proteomic table from tumor and normal
+LSCC_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/LSCC/LSCC_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+LSCC_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/LSCC/LSCC_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import the COAD 
+COAD_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/COAD/COAD_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+COAD_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/COAD/COAD_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import HNSCC proteomics data
+HNSCC_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/HNSCC/HNSCC_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+HNSCC_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/HNSCC/HNSCC_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import renal proteomics data
+CCRCC_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/CCRCC/CCRCC_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+CCRCC_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/CCRCC/CCRCC_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import endometrial proteomics data
+UCEC_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+UCEC_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import the ovarian proteomics
+OV_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/OV/OV_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+OV_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/OV/OV_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+#import the Panc proteomics
+PDAC_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/PDAC/PDAC_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+PDAC_normal <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/PDAC/PDAC_proteomics_gene_abundance_log2_reference_intensity_normalized_Normal.txt")
+
+```
+
+## Top 10 differentially expressed proteins {.tabset .tabset-dropdown}
+
+
+```{r protein_compare, echo=FALSE, results='asis', fig.height=12, fig.width=8}
+cohorts <- c("LUAD","LSCC","COAD","HNSCC","CCRCC","UCEC","OV","PDAC")
+
+for(i in 1:length(cohorts)){
+  selected_cohort <- cohorts[i]
+  
+  cat('\n \n \n')
+  cat(glue::glue('### {{selected_cohort}}', .open = '{{', .close='}}'))
+  cat('\n \n \n')
+  
+  #get make it a tidy table
+  prot_tumor <-  get(paste0(selected_cohort,"_tumor")) |>
+    pivot_longer(!idx, names_to="SampleID", values_to="protein") |>
+    mutate(sample_type = "tumor")
+  
+  #also the normal
+  prot_normal <- get(paste0(selected_cohort, "_normal")) |>
+    pivot_longer(!idx, names_to="SampleID", values_to="protein") |>
+    mutate(sample_type = "normal")
+
+  #join the tables and calculate the wilcoxin between tumor and normal samples
+  test_wilcox <- prot_tumor |>
+    bind_rows(prot_normal) |>
+    dplyr::filter(!is.na(protein))
+  
+  #count and drop any genes that do not have data in both groups
+  counts <- test_wilcox |>
+    dplyr::count(idx, sample_type) |>
+    pivot_wider(names_from=sample_type, values_from=n) |>
+    drop_na()
+
+  #filter incomplete and perform wilcon test for each gene
+  mean_diff_prot <- test_wilcox |>
+    dplyr::filter(idx %in% counts$idx) |>
+    group_by(idx) |>
+    do(w = wilcox.test(protein~sample_type, data=.)) |> 
+    summarise(idx, Wilcox = w$p.value)
+
+#add the means of each group to the wilcoxin calculations and filter for top most significant
+means_protein <- prot_tumor |>
+  bind_rows(prot_normal) |>
+  dplyr::filter(!is.na(protein)) |>
+  group_by(sample_type, idx) |>
+  summarise(mean = mean(protein)) |>
+  pivot_wider(names_from = sample_type, values_from=mean) |>
+  inner_join(mean_diff_prot) |>
+  mutate(mean_difference = tumor - normal)
+    
+  #annotate the genes with gene symbols
+  #first remove the version 
+  means_protein <- means_protein |>
+    separate_wider_delim(idx, ".", names = c("ENSEMBL",NA))
+
+# Map Ensembl IDs to gene symbols
+annot_means_protein <- select(org.Hs.eg.db, keys=means_protein$ENSEMBL, 
+                columns="SYMBOL", keytype="ENSEMBL") |>
+  inner_join(means_protein) |>
+  filter(Wilcox < 1e-10) |>  #filter to only the top for each tumor type #be super conservative for pvalue since there are 20K genes
+  slice_max(order_by = mean_difference, n = 10) |> #rename for reporting
+  dplyr::rename(Tumor_mean = tumor, Normal_mean = normal, Gene_symbol = SYMBOL) |>
+  mutate(cohort = {selected_cohort}) |>  #add the name of the cohort to the table reported
+  mutate(across(where(is.numeric), round, 3))  #round the numbers to tidy up the report
+
+  #plot the output table
+cat(knitr::knit_print(DT::datatable(annot_means_protein, width = "100%", extensions="Buttons")))
+  
+  #combine all the individual data to plot the difference in protein expression
+top_prot <- prot_tumor |>
+  bind_rows(prot_normal) |>
+  separate_wider_delim(idx, ".", names = c("ENSEMBL",NA)) |>
+  filter(ENSEMBL %in% annot_means_protein$ENSEMBL) |>
+  inner_join(dplyr::select(annot_means_protein, Gene_symbol, ENSEMBL))
+
+#make a boxplot
+boxplot <- top_prot |>
+  ggplot(aes(x=sample_type, y=protein, fill=sample_type)) +
+  geom_sina(aes(colour=sample_type), scale='width', size=1) +
+  geom_boxplot(color="black", alpha =.1, outlier.alpha = 0) +
+  scale_color_manual(values=c("grey","lightblue")) +
+  stat_compare_means() +
+#  geom_text(aes(label=after_stat(count)), stat='count', y=16, size=5, vjust="inward", hjust="inward") +
+  theme_classic() +
+  coord_cartesian(clip = "off") +
+  facet_wrap(~Gene_symbol, ncol=3) +
+    labs(title=glue::glue("{selected_cohort} Top 10 Differentially Expressed Proteins"),
+         x="",
+         y="Protein abundance (log2)")
+plot(boxplot)
+
+composite_table <- rbind(annot_means_protein)
+
+  }
+```
+
+Boxplot of the top10 proteins with the largest differential and < 1e-10 wilcoxon p-value between tumor and normal protein expression. 
+
+```{r cohort_compare, echo=TRUE, results='asis', fig.height=12, fig.width=8}
+
+#generate an upset plot of the results
+n_distinct(composite_table$Gene_symbol)
