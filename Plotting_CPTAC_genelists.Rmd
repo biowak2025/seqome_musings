@@ -1,0 +1,245 @@
+---
+title: "CPTAC Top Genes Investigation"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    mathjax: true
+tocolor: '#39ABD1'
+editior_options:
+  chunk_output_type: console
+---
+
+Date: `r Sys.Date()`
+
+
+```{r setup, include=FALSE}
+
+#set knitr options
+options(knitr.table.format = "html")
+knitr::opts_chunk$set(
+  echo=FALSE,
+  error=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  cache=FALSE
+)
+
+library(tidyverse)
+library(htmltools)
+library(ggplot2)
+library(ggforce)
+library(ggpubr)
+library(DT)
+#library(ComplexHeatmap)
+library(pheatmap)
+
+htmltools::tagList(DT::datatable(matrix(), extensions="Buttons"))
+```
+
+
+
+**CPTAC data**
+
+This report has been generated using the publicly available CPTAC mass spec proteomics data from data_freeze_v1.2. Protein abundance has been normalized and log2 transformed.
+
+**Analysis**
+
+Protein abundance from 8 tumor types with both tumor and normal tissue mass spec data are available. Differential protein expression is compared between tumor and normal (unpaired) by a Wilcoxon test and filtered for proteins < 1e-10 p-value. The top 10 proteins with the largest fold change are included in the tables and plots represented in the report.
+
+
+## UCEC Investigation {.tabset .tabset-pills}
+
+```{r import_UCEC}
+#import the genelist of interest
+CPTAC_UCEC_output <- read.csv("~/Documents/CPTAC_UCEC_output.csv")
+
+#import the protein data for UCEC
+UCEC_tumor <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_proteomics_gene_abundance_log2_reference_intensity_normalized_Tumor.txt")
+#import the UCEC rna data
+ucec_rna <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_RNAseq_gene_RSEM_coding_UQ_1500_log2_Tumor.txt")
+#import the UCEC cnv data
+ucec_cnv <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_WES_CNV_gene_gistic_level.txt")
+#import the phenotype data for immun deconvolution
+ucec_pheno <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_phenotype.txt")
+#import the meta sample data
+ucec_meta <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_meta.txt")
+#import the clinical data
+ucec_survival <- read_tsv("https://cptac-pancancer-data.s3.us-west-2.amazonaws.com/data_freeze_v1.2_reorganized/UCEC/UCEC_survival.txt")
+
+#import the msi table
+ucec_msi <- read.csv("~/Documents/CPTAC_UCEC_TMB_MSI.csv")
+
+```
+
+Uterine Corpus Endometrial Carcinoma (UCEC) will be investigated to uncover molecular subtypes that might respond to the top targets with a maximum therapeutic window.
+
+### Protein vs RNA
+
+```{r ucec_corr, results='asis', fig.height=12, fig.width=8}
+#correlate the top DE genes RNA vs protein
+#first get the tumor samples in format for joining wiht the RNA data
+corr <- UCEC_tumor |>
+  pivot_longer(!idx, names_to="SampleID", values_to="protein") |>
+  separate_wider_delim(idx, ".", names = c("ENSEMBL",NA)) |>
+  inner_join(dplyr::select(CPTAC_UCEC_output, ENSEMBL, Gene_symbol)) |>
+  distinct() 
+
+  #remove version id from the ensembl_id
+rna <- ucec_rna |>
+  pivot_longer(!idx, names_to="SampleID", values_to="RNA") |>
+  separate_wider_delim(idx, ".", names = c("ENSEMBL",NA)) |>
+  inner_join(corr, by=c("ENSEMBL","SampleID"))
+
+#plot the protein and RNA correlation
+rna |>
+  ggplot(aes(x=protein, y=RNA)) +
+  geom_point() +
+  stat_cor(method="spearman") +
+  geom_smooth(method=lm, se=FALSE) +
+  theme_classic() +
+  labs(title="Protein vs RNA Expression",
+       x="Normalized Protein log2",
+       y="RNA Expression log2(tpm + 1)") +
+  facet_wrap(~Gene_symbol, ncol=3, scales="free")
+
+```
+All proteins except TTLL11 protein expression is correlated with RNA expression. The selection biomarker will need to be IHC or protein based.
+
+```{r calculate CNB}
+#make it a tidy table and calculate the number of genes not diploid 
+copy_counts <- ucec_cnv |>
+  pivot_longer(!idx, names_to="SampleID", values_to="copy_number") |>
+  mutate(cnv = if_else(copy_number == 0, "diploid", "cnv")) |>
+  group_by(SampleID, cnv) |>
+  summarise(n = n()) |>
+  mutate(freq = round(n / sum(n), 2)) |>
+  filter(cnv == "cnv") |>
+  ungroup()
+
+
+```
+
+
+### Subtype heatmap
+
+```{r heatmap, results='asis'}
+
+#collect all the relevant mutation data and clean it for plotting
+mutation <- ucec_meta |>
+  dplyr::slice(-1) |>
+  dplyr::select(case_id, TP53_mutation, PTEN_mutation, ARID1A_mutation) |>
+  inner_join(ucec_msi, by=c("case_id"="Sample.Id")) |>
+  inner_join(dplyr::select(copy_counts, SampleID, freq), by=c("case_id"="SampleID")) |>
+  rename("POLE"='POLE_mutation', "CNB"="freq", "TP53"="TP53_mutation", 
+         "PTEN"="PTEN_mutation", "ARID1A"="ARID1A_mutation", "MSI"="MSI.Status") |>
+  mutate(POLE = fct_recode(as.character(POLE), "WT"="0", "Mutant"="1")) |>
+  mutate(TP53 = fct_recode(TP53, "WT"="0", "Mutant"="1")) |>
+  mutate(PTEN = fct_recode(PTEN, "WT"="0", "Mutant"="1")) |>
+  mutate(ARID1A = fct_recode(ARID1A, "WT"="0", "Mutant"="1")) |>
+  relocate(POLE, .after = ARID1A) |>
+  mutate(TMB = if_else(TMB > 9, "High", "Low")) |>
+  arrange(CNB)
+  
+#make this the column annotations
+annot_col <- mutation |>
+  column_to_rownames(var="case_id") 
+
+#generate the protein expression matrix
+prot_matrix <- corr |>
+  dplyr::select(-ENSEMBL) |>
+  filter(SampleID %in% mutation$case_id) |>
+  pivot_wider(names_from=SampleID, values_from=protein) |>
+  column_to_rownames(var="Gene_symbol") |>
+  relocate(all_of(mutation$case_id)) #|>  #reorder the columns so they are sorted by CNB
+#  as.matrix()
+
+#make it pretty colors
+tmb_color = c('High'="green", 'Low'="yellow")
+msi_color = c('MSI-H'="navy", 'MSS'="grey")
+annot_colors =list('TMB'= tmb_color,
+                      'TP53'= c('WT'="white", "Mutant"="red"),
+                      'PTEN'= c('WT'="white", "Mutant"="orange"),
+                      'ARID1A'= c('WT'="white", "Mutant"="yellow"),
+                      'POLE' = c('WT'="white", "Mutant"="darkgreen"),
+                      'MSI' = msi_color)
+
+# #add annot as complexHeatmap object
+# h_annot = HeatmapAnnotation(df=annot_col, which='col', 
+#                           col=list('TMB'= tmb_color,
+#                                     'TP53'= mutation_color,
+#                                     'PTEN'= mutation_color,
+#                                     'ARID1A'= mutation_color,
+#                                     'POLE' = mutation_color,
+#                                     'MSI' = msi_color)) 
+# 
+# #generate a top protein heatmap with annotations
+# ht <- ComplexHeatmap::Heatmap(prot_matrix, 
+#                         top_annotation = h_annot,
+#                         name = "Top 10 Protein Tumor vs Normal",
+#                         column_title = "CPTAC UCEC sample",
+#                         cluster_rows = FALSE,
+#                         cluster_columns = FALSE,
+#                         use_raster = TRUE
+#                         )
+# draw(ht)
+
+#complexHeatmap is broken right now and nothing will render - use Pheatmap
+heat_plot <- pheatmap(prot_matrix, 
+                      cluster_rows = F, cluster_cols = F, 
+                      annotation_col = annot_col, # column (sample) annotations
+                      annotation_colors = annot_colors, # colours for your annotations
+                      scale = "row",
+                      annotation_names_row = F, 
+                      annotation_names_col = F,
+                      show_colnames = F, show_rownames = T, # displaying column and row names
+                      main = "CPTAC UCEC Samples") # a title for our heatmap
+
+  
+```
+
+
+### Pair-wise comparisons {.tabset .tabset-dropdown}
+
+```{r pairwise, results='asis', fig.height=12, fig.width=8}
+
+#Generate boxplots for comparing expression
+#Join the sample annotations to the protein expression
+mut_protein <- prot_matrix |>
+  as.data.frame() |>
+  rownames_to_column(var="Gene_symbol") |>
+  pivot_longer(!Gene_symbol, names_to="case_id", values_to="protein") |>
+  inner_join(mutation, by="case_id")
+
+#list the comparisons to make
+comparisons <- c("TP53","PTEN","ARID1A","POLE","MSI","TMB")
+
+for(i in 1:length(comparisons)){
+  selected_compare <- comparisons[i]
+  
+  cat('\n \n \n')
+  cat(glue::glue('#### {{selected_compare}}', .open = '{{', .close='}}'))
+  cat('\n \n \n')
+  
+
+#plot the comarison
+boxplot <- mut_protein |>
+  ggplot(aes(x=.data[[selected_compare]], y=protein, fill=selected_compare)) +
+  geom_sina(aes(colour=selected_compare), scale='width', size=1) +
+  geom_boxplot(color="black", alpha =.1, outlier.alpha = 0) +
+  scale_color_manual(values=c("grey","lightblue")) +
+  scale_fill_manual(values=c("grey","lightblue")) +
+  stat_compare_means() +
+  geom_text(aes(label=after_stat(count)), stat='count', y=16, size=5, vjust="inward") +
+  theme_classic() +
+  theme(legend.position="none") +
+  coord_cartesian(clip = "off") +
+  facet_wrap(~Gene_symbol, ncol=3) +
+    labs(title="CPTAC UCEC Differentially Expressed Proteins",
+         x="",
+         y="Protein abundance (log2)")
+plot(boxplot)
+
+}
+
+```
