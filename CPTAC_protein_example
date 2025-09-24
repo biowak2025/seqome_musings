@@ -33,7 +33,6 @@ library(ggplot2)
 library(ggforce)
 library(ggpubr)
 library(DT)
-library(ComplexHeatmap)
 
 htmltools::tagList(DT::datatable(matrix(), extensions="Buttons"))
 ```
