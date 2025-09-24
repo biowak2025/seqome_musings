@@ -28,7 +28,6 @@ knitr::opts_chunk$set(
 library(tidyverse)
 library(org.Hs.eg.db)
 library(htmltools)
-library(kableExtra)
 library(ggplot2)
 library(ggforce)
 library(ggpubr)
@@ -176,7 +175,4 @@ composite_table <- rbind(annot_means_protein)
 
 Boxplot of the top10 proteins with the largest differential and < 1e-10 wilcoxon p-value between tumor and normal protein expression. 
 
-```{r cohort_compare, echo=TRUE, results='asis', fig.height=12, fig.width=8}
 
-#generate an upset plot of the results
-n_distinct(composite_table$Gene_symbol)
